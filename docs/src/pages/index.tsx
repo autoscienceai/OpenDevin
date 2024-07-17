@@ -1,10 +1,9 @@
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import Layout from "@theme/Layout";
-import '../css/main.css';
-
 import { HomepageHeader } from "../components/HomepageHeader/HomepageHeader";
 import { Welcome } from "../components/Welcome/Welcome";
-import CustomFooter from "../components/CustomFooter";
+import { translate } from '@docusaurus/Translate';
+
 export function Header({ title, summary, description }): JSX.Element {
   return (
     <div>
@@ -21,7 +20,11 @@ export default function Home(): JSX.Element {
     <>
     <Layout
       title={`${siteConfig.title}`}
-      description="AI-powered code generation for software engineering."
+      description={translate({
+        id: 'homepage.description',
+        message: 'AI-powered code generation for software engineering.',
+        description: 'The homepage description',
+      })}
     >
       <div>
         <HomepageHeader />
@@ -30,7 +33,6 @@ export default function Home(): JSX.Element {
         </div>
       </div>
     </Layout>
-    <CustomFooter />
     </>
   );
 }

@@ -1,11 +1,12 @@
 [tool.poetry]
 name = "opendevin"
-version = "0.1.0"
+version = "0.8.0"
 description = "OpenDevin: Code Less, Make More"
 authors = ["OpenDevin"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/OpenDevin/OpenDevin"
+include = ["poetry.lock"]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -24,7 +25,7 @@ numpy = "*"
 json-repair = "*"
 browsergym = "0.3.4" # integrate browsergym as the browsing interface
 html2text = "*"
-e2b = "^0.17.0"
+e2b = "^0.17.1"
 pexpect = "*"
 jinja2 = "^3.1.3"
 python-multipart = "*"
@@ -32,7 +33,10 @@ boto3 = "*"
 minio = "^7.2.7"
 gevent = "^24.2.1"
 pyarrow = "16.1.0" # transitive dependency, pinned here to avoid conflicts
-tenacity = "^8.3.0"
+tenacity = "^8.5.0"
+zope-interface = "6.4.post2"
+pathspec = "^0.12.1"
+google-cloud-aiplatform = "*"
 
 [tool.poetry.group.llama-index.dependencies]
 llama-index = "*"
@@ -44,8 +48,8 @@ llama-index-embeddings-azure-openai = "*"
 llama-index-embeddings-ollama = "*"
 
 [tool.poetry.group.dev.dependencies]
-ruff = "0.4.6"
-mypy = "1.10.0"
+ruff = "0.5.2"
+mypy = "1.10.1"
 pre-commit = "3.7.1"
 
 [tool.poetry.group.test.dependencies]
@@ -53,13 +57,6 @@ pytest = "*"
 pytest-cov = "*"
 pytest-asyncio = "*"
 pytest-forked = "*"
-flake8 = "*"
-openai = "*"
-python-docx = "*"
-PyPDF2 = "*"
-pylatexenc = "*"
-python-pptx = "*"
-opencv-python = "*"
 pandas = "*"
 reportlab = "*"
 
@@ -67,12 +64,16 @@ reportlab = "*"
 concurrency = ["gevent"]
 
 
-
-[tool.poetry.group.evaluation.dependencies]
-streamlit = "*"
-whatthepatch = "*"
-retry = "*"
-evaluate = "*"
+[tool.poetry.group.runtime.dependencies]
+jupyterlab = "*"
+notebook = "*"
+jupyter_kernel_gateway = "*"
+flake8 = "*"
+python-docx = "*"
+PyPDF2 = "*"
+python-pptx = "*"
+pylatexenc = "*"
+opencv-python = "*"
 
 [build-system]
 build-backend = "poetry.core.masonry.api"
@@ -87,3 +88,19 @@ ignore = [ "E501" ]
 [tool.black]
 # prevent black (if installed) from changing single quotes to double quotes
 skip-string-normalization = true
+
+[tool.ruff.lint]
+select = ["D"]
+# ignore warnings for missing docstrings
+ignore = ["D1"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+
+[tool.poetry.group.evaluation.dependencies]
+streamlit = "*"
+whatthepatch = "*"
+retry = "*"
+evaluate = "*"
+swebench = { git = "https://github.com/OpenDevin/SWE-bench.git" }

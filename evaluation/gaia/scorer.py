@@ -17,8 +17,10 @@ def normalize_number_str(number_str: str) -> float:
 
 def split_string(
     s: str,
-    char_list: list[str] = [',', ';'],
+    char_list: list[str] = None,
 ) -> list[str]:
+    if char_list is None:
+        char_list = [',', ';']
     pattern = f"[{''.join(char_list)}]"
     return re.split(pattern, s)
 
@@ -51,7 +53,9 @@ def question_scorer(
         # check length is the same
         if len(gt_elems) != len(ma_elems):
             warnings.warn(
-                'Answer lists have different lengths, returning False.', UserWarning
+                'Answer lists have different lengths, returning False.',
+                UserWarning,
+                stacklevel=2,
             )
             return False
 
@@ -76,14 +80,14 @@ def question_scorer(
 
 
 def normalize_str(input_str, remove_punct=True) -> str:
-    """
-    Normalize a string by:
+    """Normalize a string by:
     - Removing all white spaces
     - Optionally removing punctuation (if remove_punct is True)
     - Converting to lowercase
     Parameters:
     - input_str: str, the string to normalize
     - remove_punct: bool, whether to remove punctuation (default: True)
+
     Returns:
     - str, the normalized string
     """

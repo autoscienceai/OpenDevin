@@ -1,18 +1,18 @@
+from opendevin.core.config import config
 from opendevin.events.action import (
     Action,
     AddTaskAction,
     AgentFinishAction,
-    AgentRecallAction,
     AgentRejectAction,
     BrowseInteractiveAction,
     BrowseURLAction,
-    CmdKillAction,
     CmdRunAction,
     FileReadAction,
     FileWriteAction,
     MessageAction,
     ModifyTaskAction,
 )
+from opendevin.events.action.action import ActionConfirmationStatus
 from opendevin.events.serialization import (
     event_from_dict,
     event_to_dict,
@@ -29,7 +29,9 @@ def serialization_deserialization(original_action_dict, cls):
         action_instance, cls
     ), f'The action instance should be an instance of {cls.__name__}.'
     serialized_action_dict = event_to_dict(action_instance)
-    serialized_action_memory = event_to_memory(action_instance)
+    serialized_action_memory = event_to_memory(
+        action_instance, config.get_llm_config().max_message_chars
+    )
     serialized_action_dict.pop('message')
     assert (
         serialized_action_dict == original_action_dict
@@ -67,14 +69,6 @@ def test_message_action_serialization_deserialization():
     serialization_deserialization(original_action_dict, MessageAction)
 
 
-def test_agent_recall_action_serialization_deserialization():
-    original_action_dict = {
-        'action': 'recall',
-        'args': {'query': 'Test query.', 'thought': ''},
-    }
-    serialization_deserialization(original_action_dict, AgentRecallAction)
-
-
 def test_agent_finish_action_serialization_deserialization():
     original_action_dict = {'action': 'finish', 'args': {'outputs': {}, 'thought': ''}}
     serialization_deserialization(original_action_dict, AgentFinishAction)
@@ -85,18 +79,14 @@ def test_agent_reject_action_serialization_deserialization():
     serialization_deserialization(original_action_dict, AgentRejectAction)
 
 
-def test_cmd_kill_action_serialization_deserialization():
-    original_action_dict = {
-        'action': 'kill',
-        'args': {'command_id': '1337', 'thought': ''},
-    }
-    serialization_deserialization(original_action_dict, CmdKillAction)
-
-
 def test_cmd_run_action_serialization_deserialization():
     original_action_dict = {
         'action': 'run',
-        'args': {'command': 'echo "Hello world"', 'background': True, 'thought': ''},
+        'args': {
+            'command': 'echo "Hello world"',
+            'thought': '',
+            'is_confirmed': ActionConfirmationStatus.CONFIRMED,
+        },
     }
     serialization_deserialization(original_action_dict, CmdRunAction)
 
@@ -112,7 +102,11 @@ def test_browse_url_action_serialization_deserialization():
 def test_browse_interactive_action_serialization_deserialization():
     original_action_dict = {
         'action': 'browse_interactive',
-        'args': {'thought': '', 'browser_actions': 'goto("https://www.example.com")'},
+        'args': {
+            'thought': '',
+            'browser_actions': 'goto("https://www.example.com")',
+            'browsergym_send_msg_to_user': '',
+        },
     }
     serialization_deserialization(original_action_dict, BrowseInteractiveAction)
 

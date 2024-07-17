@@ -75,7 +75,8 @@ class PromptElement:
     Prompt elements are used to build the prompt. Use flags to control which
     prompt elements are visible. We use class attributes as a convenient way
     to implement static prompts, but feel free to override them with instance
-    attributes or @property decorator."""
+    attributes or @property decorator.
+    """
 
     _prompt = ''
     _abstract_ex = ''
@@ -146,7 +147,7 @@ class Shrinkable(PromptElement, abc.ABC):
         """Implement shrinking of this prompt element.
 
         You need to recursively call all shrinkable elements that are part of
-        this prompt. You can also implement a shriking startegy for this prompt.
+        this prompt. You can also implement a shrinking strategy for this prompt.
         Shrinking is can be called multiple times to progressively shrink the
         prompt until it fits max_tokens. Default max shrink iterations is 20.
         """
@@ -161,7 +162,7 @@ class Truncater(Shrinkable):
 
     def __init__(self, visible, shrink_speed=0.3, start_truncate_iteration=10):
         super().__init__(visible=visible)
-        self.shrink_speed = shrink_speed  # the percentage shrinked in each iteration
+        self.shrink_speed = shrink_speed  # the percentage shrunk in each iteration
         self.start_truncate_iteration = (
             start_truncate_iteration  # the iteration to start truncating
         )
@@ -200,11 +201,10 @@ def fit_tokens(
     model_name : str, optional
         The name of the model used when tokenizing.
 
-    Returns
+    Returns:
     -------
     str : the prompt after shrinking.
     """
-
     if max_prompt_chars is None:
         return shrinkable.prompt
 
@@ -494,11 +494,13 @@ def _get_action_space(flags: Flags) -> AbstractActionSet:
             action_space = PythonActionSet(strict=flags.is_strict)
             if flags.multi_actions:
                 warn(
-                    f'Flag action_space={repr(flags.action_space)} incompatible with multi_actions={repr(flags.multi_actions)}.'
+                    f'Flag action_space={repr(flags.action_space)} incompatible with multi_actions={repr(flags.multi_actions)}.',
+                    stacklevel=2,
                 )
             if flags.demo_mode != 'off':
                 warn(
-                    f'Flag action_space={repr(flags.action_space)} incompatible with demo_mode={repr(flags.demo_mode)}.'
+                    f'Flag action_space={repr(flags.action_space)} incompatible with demo_mode={repr(flags.demo_mode)}.',
+                    stacklevel=2,
                 )
             return action_space
         case 'bid':
@@ -577,8 +579,8 @@ the form is not visible yet or some fields are disabled. I need to replan.
 def diff(previous, new):
     """Return a string showing the difference between original and new.
 
-    If the difference is above diff_threshold, return the diff string."""
-
+    If the difference is above diff_threshold, return the diff string.
+    """
     if previous == new:
         return 'Identical', []
 

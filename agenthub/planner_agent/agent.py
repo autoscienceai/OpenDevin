@@ -1,9 +1,11 @@
+from agenthub.monologue_agent.response_parser import MonologueResponseParser
 from opendevin.controller.agent import Agent
 from opendevin.controller.state.state import State
 from opendevin.events.action import Action, AgentFinishAction
 from opendevin.llm.llm import LLM
+from opendevin.runtime.tools import RuntimeTool
 
-from .prompt import get_prompt, parse_response
+from .prompt import get_prompt
 
 
 class PlannerAgent(Agent):
@@ -12,10 +14,11 @@ class PlannerAgent(Agent):
     The planner agent utilizes a special prompting strategy to create long term plans for solving problems.
     The agent is given its previous action-observation pairs, current task, and hint based on last action taken at every step.
     """
+    runtime_tools: list[RuntimeTool] = [RuntimeTool.BROWSER]
+    response_parser = MonologueResponseParser()
 
     def __init__(self, llm: LLM):
-        """
-        Initialize the Planner Agent with an LLM
+        """Initialize the Planner Agent with an LLM
 
         Parameters:
         - llm (LLM): The llm to be used by this agent
@@ -23,8 +26,7 @@ class PlannerAgent(Agent):
         super().__init__(llm)
 
     def step(self, state: State) -> Action:
-        """
-        Checks to see if current step is completed, returns AgentFinishAction if True.
+        """Checks to see if current step is completed, returns AgentFinishAction if True.
         Otherwise, creates a plan prompt and sends to model for inference, returning the result as the next action.
 
         Parameters:
@@ -34,7 +36,6 @@ class PlannerAgent(Agent):
         - AgentFinishAction: If the last state was 'completed', 'verified', or 'abandoned'
         - Action: The next action to take based on llm response
         """
-
         if state.root_task.state in [
             'completed',
             'verified',
@@ -43,11 +44,5 @@ class PlannerAgent(Agent):
             return AgentFinishAction()
         prompt = get_prompt(state)
         messages = [{'content': prompt, 'role': 'user'}]
-        resp = self.llm.do_completion(messages=messages)
-        action_resp = resp['choices'][0]['message']['content']
-        state.num_of_chars += len(prompt) + len(action_resp)
-        action = parse_response(action_resp)
-        return action
-
-    def search_memory(self, query: str) -> list[str]:
-        return []
+        resp = self.llm.completion(messages=messages)
+        return self.response_parser.parse(resp)
