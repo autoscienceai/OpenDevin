@@ -18,18 +18,18 @@ sidebar_position: 3
 - 执行任何有效的Linux `bash`命令
 - 使用[交互式Python解释器](https://ipython.org/)执行任何有效的 `Python`代码。这是通过`bash`命令模拟的，详细信息请参见插件系统。
 
-![image](https://github.com/OpenDevin/OpenDevin/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
+![image](https://github.com/All-Hands-AI/OpenHands/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
 
 ### 插件系统
 
-为了使CodeAct agent在仅能访问`bash`动作空间时更强大，CodeAct agent利用了OpenDevin的插件系统：
+为了使CodeAct agent在仅能访问`bash`动作空间时更强大，CodeAct agent利用了OpenHands的插件系统：
 
-- [Jupyter插件](https://github.com/OpenDevin/OpenDevin/tree/main/opendevin/runtime/plugins/jupyter)：通过bash命令实现IPython执行
-- [SWE-agent工具插件](https://github.com/OpenDevin/OpenDevin/tree/main/opendevin/runtime/plugins/swe_agent_commands)：为软件开发任务引入的强大bash命令行工具，由[swe-agent](https://github.com/princeton-nlp/swe-agent)提供。
+- [Jupyter插件](https://github.com/All-Hands-AI/OpenHands/tree/main/openhands/runtime/plugins/jupyter)：通过bash命令实现IPython执行
+- [SWE-agent工具插件](https://github.com/All-Hands-AI/OpenHands/tree/main/openhands/runtime/plugins/swe_agent_commands)：为软件开发任务引入的强大bash命令行工具，由[swe-agent](https://github.com/princeton-nlp/swe-agent)提供。
 
 ### 演示
 
-https://github.com/OpenDevin/OpenDevin/assets/38853559/f592a192-e86c-4f48-ad31-d69282d5f6ac
+https://github.com/All-Hands-AI/OpenHands/assets/38853559/f592a192-e86c-4f48-ad31-d69282d5f6ac
 
 _CodeActAgent使用`gpt-4-turbo-2024-04-09`执行数据科学任务（线性回归）的示例_
 
@@ -60,42 +60,6 @@ _CodeActAgent使用`gpt-4-turbo-2024-04-09`执行数据科学任务（线性回�
 
 [] 支持Web浏览
 [] 完成CodeAct agent提交Github PR的工作流程
-
-## Monologue Agent
-
-### 描述
-
-Monologue Agent利用长短期记忆来完成任务。
-长期记忆存储为LongTermMemory对象，模型使用它来搜索过去的示例。
-短期记忆存储为Monologue对象，模型可以根据需要进行压缩。
-
-### 动作
-
-`Action`,
-`NullAction`,
-`CmdRunAction`,
-`FileWriteAction`,
-`FileReadAction`,
-`BrowseURLAction`,
-`GithubPushAction`,
-`AgentThinkAction`
-
-### 观测
-
-`Observation`,
-`NullObservation`,
-`CmdOutputObservation`,
-`FileReadObservation`,
-`BrowserOutputObservation`
-
-### 方法
-
-| 方法           | 描述                                                                                                                                       |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `__init__`     | 使用长期记忆和内部独白初始化Agent                                                                                                            |
-| `_add_event`   | 将事件附加到Agent的独白中，如独白过长自动与摘要一起压缩                                                                                    |
-| `_initialize`  | 使用`INITIAL_THOUGHTS`列表为agent提供其能力的上下文以及如何导航`/workspace`                                                                 |
-| `step`         | 通过添加最近的动作和观测修改当前状态，然后提示模型考虑其接下来的动作。                                                                     |
 
 ## Planner Agent
 

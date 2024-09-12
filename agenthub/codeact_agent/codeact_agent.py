@@ -1,15 +1,13 @@
+import os
+from itertools import islice
+
 from agenthub.codeact_agent.action_parser import CodeActResponseParser
-from agenthub.codeact_agent.prompt import (
-    COMMAND_DOCS,
-    EXAMPLES,
-    GITHUB_MESSAGE,
-    SYSTEM_PREFIX,
-    SYSTEM_SUFFIX,
-)
-from opendevin.controller.agent import Agent
-from opendevin.controller.state.state import State
-from opendevin.core.config import config
-from opendevin.events.action import (
+from openhands.controller.agent import Agent
+from openhands.controller.state.state import State
+from openhands.core.config import AgentConfig
+from openhands.core.logger import openhands_logger as logger
+from openhands.core.message import ImageContent, Message, TextContent
+from openhands.events.action import (
     Action,
     AgentDelegateAction,
     AgentFinishAction,
@@ -17,100 +15,34 @@ from opendevin.events.action import (
     IPythonRunCellAction,
     MessageAction,
 )
-from opendevin.events.observation import (
+from openhands.events.observation import (
     AgentDelegateObservation,
     CmdOutputObservation,
     IPythonRunCellObservation,
+    UserRejectObservation,
 )
-from opendevin.events.serialization.event import truncate_content
-from opendevin.llm.llm import LLM
-from opendevin.runtime.plugins import (
+from openhands.events.observation.error import ErrorObservation
+from openhands.events.observation.observation import Observation
+from openhands.events.serialization.event import truncate_content
+from openhands.llm.llm import LLM
+from openhands.runtime.plugins import (
     AgentSkillsRequirement,
     JupyterRequirement,
     PluginRequirement,
 )
-from opendevin.runtime.tools import RuntimeTool
-
-ENABLE_GITHUB = True
-
-
-def action_to_str(action: Action) -> str:
-    if isinstance(action, CmdRunAction):
-        return f'{action.thought}\n<execute_bash>\n{action.command}\n</execute_bash>'
-    elif isinstance(action, IPythonRunCellAction):
-        return f'{action.thought}\n<execute_ipython>\n{action.code}\n</execute_ipython>'
-    elif isinstance(action, AgentDelegateAction):
-        return f'{action.thought}\n<execute_browse>\n{action.inputs["task"]}\n</execute_browse>'
-    elif isinstance(action, MessageAction):
-        return action.content
-    return ''
-
-
-def get_action_message(action: Action) -> dict[str, str] | None:
-    if (
-        isinstance(action, AgentDelegateAction)
-        or isinstance(action, CmdRunAction)
-        or isinstance(action, IPythonRunCellAction)
-        or isinstance(action, MessageAction)
-    ):
-        return {
-            'role': 'user' if action.source == 'user' else 'assistant',
-            'content': action_to_str(action),
-        }
-    return None
-
-
-def get_observation_message(obs) -> dict[str, str] | None:
-    max_message_chars = config.get_llm_config_from_agent(
-        'CodeActAgent'
-    ).max_message_chars
-    if isinstance(obs, CmdOutputObservation):
-        content = 'OBSERVATION:\n' + truncate_content(obs.content, max_message_chars)
-        content += (
-            f'\n[Command {obs.command_id} finished with exit code {obs.exit_code}]'
-        )
-        return {'role': 'user', 'content': content}
-    elif isinstance(obs, IPythonRunCellObservation):
-        content = 'OBSERVATION:\n' + obs.content
-        # replace base64 images with a placeholder
-        splitted = content.split('\n')
-        for i, line in enumerate(splitted):
-            if '![image](data:image/png;base64,' in line:
-                splitted[i] = (
-                    '![image](data:image/png;base64, ...) already displayed to user'
-                )
-        content = '\n'.join(splitted)
-        content = truncate_content(content, max_message_chars)
-        return {'role': 'user', 'content': content}
-    elif isinstance(obs, AgentDelegateObservation):
-        content = 'OBSERVATION:\n' + truncate_content(
-            str(obs.outputs), max_message_chars
-        )
-        return {'role': 'user', 'content': content}
-    return None
-
-
-# FIXME: We can tweak these two settings to create MicroAgents specialized toward different area
-def get_system_message() -> str:
-    if ENABLE_GITHUB:
-        return f'{SYSTEM_PREFIX}\n{GITHUB_MESSAGE}\n\n{COMMAND_DOCS}\n\n{SYSTEM_SUFFIX}'
-    else:
-        return f'{SYSTEM_PREFIX}\n\n{COMMAND_DOCS}\n\n{SYSTEM_SUFFIX}'
-
-
-def get_in_context_example() -> str:
-    return EXAMPLES
+from openhands.utils.microagent import MicroAgent
+from openhands.utils.prompt import PromptManager
 
 
 class CodeActAgent(Agent):
-    VERSION = '1.8'
+    VERSION = '1.9'
     """
     The Code Act Agent is a minimalist agent.
     The agent works by passing the model a list of action-observation pairs and prompting the model to take the next step.
 
     ### Overview
 
-    This agent implements the CodeAct idea ([paper](https://arxiv.org/abs/2402.13463), [tweet](https://twitter.com/xingyaow_/status/1754556835703751087)) that consolidates LLM agents’ **act**ions into a unified **code** action space for both *simplicity* and *performance* (see paper for more details).
+    This agent implements the CodeAct idea ([paper](https://arxiv.org/abs/2402.01030), [tweet](https://twitter.com/xingyaow_/status/1754556835703751087)) that consolidates LLM agents’ **act**ions into a unified **code** action space for both *simplicity* and *performance* (see paper for more details).
 
     The conceptual idea is illustrated below. At each turn, the agent can:
 
@@ -119,24 +51,7 @@ class CodeActAgent(Agent):
     - Execute any valid Linux `bash` command
     - Execute any valid `Python` code with [an interactive Python interpreter](https://ipython.org/). This is simulated through `bash` command, see plugin system below for more details.
 
-    ![image](https://github.com/OpenDevin/OpenDevin/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
-
-    ### Plugin System
-
-    To make the CodeAct agent more powerful with only access to `bash` action space, CodeAct agent leverages OpenDevin's plugin system:
-    - [Jupyter plugin](https://github.com/OpenDevin/OpenDevin/tree/main/opendevin/runtime/plugins/jupyter): for IPython execution via bash command
-    - [SWE-agent tool plugin](https://github.com/OpenDevin/OpenDevin/tree/main/opendevin/runtime/plugins/swe_agent_commands): Powerful bash command line tools for software development tasks introduced by [swe-agent](https://github.com/princeton-nlp/swe-agent).
-
-    ### Demo
-
-    https://github.com/OpenDevin/OpenDevin/assets/38853559/f592a192-e86c-4f48-ad31-d69282d5f6ac
-
-    *Example of CodeActAgent with `gpt-4-turbo-2024-04-09` performing a data science task (linear regression)*
-
-    ### Work-in-progress & Next step
-
-    [] Support web-browsing
-    [] Complete the workflow for CodeAct agent to submit Github PRs
+    ![image](https://github.com/All-Hands-AI/OpenHands/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
 
     """
 
@@ -147,24 +62,111 @@ class CodeActAgent(Agent):
         AgentSkillsRequirement(),
         JupyterRequirement(),
     ]
-    runtime_tools: list[RuntimeTool] = [RuntimeTool.BROWSER]
-
-    system_message: str = get_system_message()
-    in_context_example: str = f"Here is an example of how you can interact with the environment for task solving:\n{get_in_context_example()}\n\nNOW, LET'S START!"
 
     action_parser = CodeActResponseParser()
 
     def __init__(
         self,
         llm: LLM,
+        config: AgentConfig,
     ) -> None:
         """Initializes a new instance of the CodeActAgent class.
 
         Parameters:
         - llm (LLM): The llm to be used by this agent
         """
-        super().__init__(llm)
+        super().__init__(llm, config)
         self.reset()
+
+        self.micro_agent = (
+            MicroAgent(
+                os.path.join(
+                    os.path.dirname(__file__), 'micro', f'{config.micro_agent_name}.md'
+                )
+            )
+            if config.micro_agent_name
+            else None
+        )
+
+        self.prompt_manager = PromptManager(
+            prompt_dir=os.path.join(os.path.dirname(__file__)),
+            agent_skills_docs=AgentSkillsRequirement.documentation,
+            micro_agent=self.micro_agent,
+        )
+
+    def action_to_str(self, action: Action) -> str:
+        if isinstance(action, CmdRunAction):
+            return (
+                f'{action.thought}\n<execute_bash>\n{action.command}\n</execute_bash>'
+            )
+        elif isinstance(action, IPythonRunCellAction):
+            return f'{action.thought}\n<execute_ipython>\n{action.code}\n</execute_ipython>'
+        elif isinstance(action, AgentDelegateAction):
+            return f'{action.thought}\n<execute_browse>\n{action.inputs["task"]}\n</execute_browse>'
+        elif isinstance(action, MessageAction):
+            return action.content
+        elif isinstance(action, AgentFinishAction) and action.source == 'agent':
+            return action.thought
+        return ''
+
+    def get_action_message(self, action: Action) -> Message | None:
+        if (
+            isinstance(action, AgentDelegateAction)
+            or isinstance(action, CmdRunAction)
+            or isinstance(action, IPythonRunCellAction)
+            or isinstance(action, MessageAction)
+            or (isinstance(action, AgentFinishAction) and action.source == 'agent')
+        ):
+            content = [TextContent(text=self.action_to_str(action))]
+
+            if (
+                self.llm.vision_is_active()
+                and isinstance(action, MessageAction)
+                and action.images_urls
+            ):
+                content.append(ImageContent(image_urls=action.images_urls))
+
+            return Message(
+                role='user' if action.source == 'user' else 'assistant', content=content
+            )
+        return None
+
+    def get_observation_message(self, obs: Observation) -> Message | None:
+        max_message_chars = self.llm.config.max_message_chars
+        obs_prefix = 'OBSERVATION:\n'
+        if isinstance(obs, CmdOutputObservation):
+            text = obs_prefix + truncate_content(obs.content, max_message_chars)
+            text += (
+                f'\n[Command {obs.command_id} finished with exit code {obs.exit_code}]'
+            )
+            return Message(role='user', content=[TextContent(text=text)])
+        elif isinstance(obs, IPythonRunCellObservation):
+            text = obs_prefix + obs.content
+            # replace base64 images with a placeholder
+            splitted = text.split('\n')
+            for i, line in enumerate(splitted):
+                if '![image](data:image/png;base64,' in line:
+                    splitted[i] = (
+                        '![image](data:image/png;base64, ...) already displayed to user'
+                    )
+            text = '\n'.join(splitted)
+            text = truncate_content(text, max_message_chars)
+            return Message(role='user', content=[TextContent(text=text)])
+        elif isinstance(obs, AgentDelegateObservation):
+            text = obs_prefix + truncate_content(str(obs.outputs), max_message_chars)
+            return Message(role='user', content=[TextContent(text=text)])
+        elif isinstance(obs, ErrorObservation):
+            text = obs_prefix + truncate_content(obs.content, max_message_chars)
+            text += '\n[Error occurred in processing last action]'
+            return Message(role='user', content=[TextContent(text=text)])
+        elif isinstance(obs, UserRejectObservation):
+            text = 'OBSERVATION:\n' + truncate_content(obs.content, max_message_chars)
+            text += '\n[Last action has been rejected by the user]'
+            return Message(role='user', content=[TextContent(text=text)])
+        else:
+            # If an observation message is not returned, it will cause an error
+            # when the LLM tries to return the next message
+            raise ValueError(f'Unknown observation type: {type(obs)}')
 
     def reset(self) -> None:
         """Resets the CodeAct Agent."""
@@ -190,47 +192,100 @@ class CodeActAgent(Agent):
             return AgentFinishAction()
 
         # prepare what we want to send to the LLM
-        messages: list[dict[str, str]] = self._get_messages(state)
-
-        response = self.llm.completion(
-            messages=messages,
-            stop=[
+        messages = self._get_messages(state)
+        params = {
+            'messages': self.llm.format_messages_for_llm(messages),
+            'stop': [
                 '</execute_ipython>',
                 '</execute_bash>',
                 '</execute_browse>',
             ],
-            temperature=0.0,
-        )
+            'temperature': 0.0,
+        }
+
+        if self.llm.is_caching_prompt_active():
+            params['extra_headers'] = {
+                'anthropic-beta': 'prompt-caching-2024-07-31',
+            }
+
+        try:
+            response = self.llm.completion(**params)
+        except Exception as e:
+            logger.error(f'{e}')
+            error_message = '{}: {}'.format(type(e).__name__, str(e).split('\n')[0])
+            return AgentFinishAction(
+                thought=f'Agent encountered an error while processing the last action.\nError: {error_message}\nPlease try again.'
+            )
+
         return self.action_parser.parse(response)
 
-    def _get_messages(self, state: State) -> list[dict[str, str]]:
-        messages = [
-            {'role': 'system', 'content': self.system_message},
-            {'role': 'user', 'content': self.in_context_example},
+    def _get_messages(self, state: State) -> list[Message]:
+        messages: list[Message] = [
+            Message(
+                role='system',
+                content=[
+                    TextContent(
+                        text=self.prompt_manager.system_message,
+                        cache_prompt=self.llm.is_caching_prompt_active(),  # Cache system prompt
+                    )
+                ],
+            ),
+            Message(
+                role='user',
+                content=[
+                    TextContent(
+                        text=self.prompt_manager.initial_user_message,
+                        cache_prompt=self.llm.is_caching_prompt_active(),  # if the user asks the same query,
+                    )
+                ],
+            ),
         ]
 
         for event in state.history.get_events():
             # create a regular message from an event
-            message = (
-                get_action_message(event)
-                if isinstance(event, Action)
-                else get_observation_message(event)
-            )
+            if isinstance(event, Action):
+                message = self.get_action_message(event)
+            elif isinstance(event, Observation):
+                message = self.get_observation_message(event)
+            else:
+                raise ValueError(f'Unknown event type: {type(event)}')
 
             # add regular message
             if message:
-                messages.append(message)
+                # handle error if the message is the SAME role as the previous message
+                # litellm.exceptions.BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': 'Only supports u/a/u/a/u...'}
+                # there shouldn't be two consecutive messages from the same role
+                if messages and messages[-1].role == message.role:
+                    messages[-1].content.extend(message.content)
+                else:
+                    messages.append(message)
 
-        # the latest user message is important:
+        # Add caching to the last 2 user messages
+        if self.llm.is_caching_prompt_active():
+            user_turns_processed = 0
+            for message in reversed(messages):
+                if message.role == 'user' and user_turns_processed < 2:
+                    message.content[
+                        -1
+                    ].cache_prompt = True  # Last item inside the message content
+                    user_turns_processed += 1
+
+        # The latest user message is important:
         # we want to remind the agent of the environment constraints
         latest_user_message = next(
-            (m for m in reversed(messages) if m['role'] == 'user'), None
+            islice(
+                (
+                    m
+                    for m in reversed(messages)
+                    if m.role == 'user'
+                    and any(isinstance(c, TextContent) for c in m.content)
+                ),
+                1,
+            ),
+            None,
         )
-
-        # add a reminder to the prompt
         if latest_user_message:
-            latest_user_message['content'] += (
-                f'\n\nENVIRONMENT REMINDER: You have {state.max_iterations - state.iteration} turns left to complete the task. When finished reply with <finish></finish>'
-            )
+            reminder_text = f'\n\nENVIRONMENT REMINDER: You have {state.max_iterations - state.iteration} turns left to complete the task. When finished reply with <finish></finish>.'
+            latest_user_message.content.append(TextContent(text=reminder_text))
 
         return messages

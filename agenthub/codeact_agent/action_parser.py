@@ -1,7 +1,7 @@
 import re
 
-from opendevin.controller.action_parser import ActionParser, ResponseParser
-from opendevin.events.action import (
+from openhands.controller.action_parser import ActionParser, ResponseParser
+from openhands.events.action import (
     Action,
     AgentDelegateAction,
     AgentFinishAction,
@@ -98,7 +98,7 @@ class CodeActActionParserCmdRun(ActionParser):
         # a command was found
         command_group = self.bash_command.group(1).strip()
         if command_group.strip() == 'exit':
-            return AgentFinishAction()
+            return AgentFinishAction(thought=thought)
         return CmdRunAction(command=command_group, thought=thought)
 
 
