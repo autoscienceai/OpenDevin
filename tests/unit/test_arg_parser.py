@@ -1,6 +1,6 @@
 import pytest
 
-from openhands.core.config import _DEFAULT_AGENT, _MAX_ITERATIONS, get_parser
+from openhands.core.config import OH_DEFAULT_AGENT, OH_MAX_ITERATIONS, get_parser
 
 
 def test_parser_default_values():
@@ -10,8 +10,8 @@ def test_parser_default_values():
     assert args.directory is None
     assert args.task == ''
     assert args.file is None
-    assert args.agent_cls == _DEFAULT_AGENT
-    assert args.max_iterations == _MAX_ITERATIONS
+    assert args.agent_cls == OH_DEFAULT_AGENT
+    assert args.max_iterations == OH_MAX_ITERATIONS
     assert args.max_budget_per_task is None
     assert args.eval_output_dir == 'evaluation/evaluation_outputs/outputs'
     assert args.eval_n_limit is None
@@ -19,6 +19,7 @@ def test_parser_default_values():
     assert args.eval_note is None
     assert args.llm_config is None
     assert args.name == 'default'
+    assert not args.no_auto_continue
 
 
 def test_parser_custom_values():
@@ -49,6 +50,7 @@ def test_parser_custom_values():
             'gpt4',
             '-n',
             'test_session',
+            '--no-auto-continue',
         ]
     )
 
@@ -64,6 +66,7 @@ def test_parser_custom_values():
     assert args.eval_note == 'Test run'
     assert args.llm_config == 'gpt4'
     assert args.name == 'test_session'
+    assert args.no_auto_continue
 
 
 def test_parser_file_overrides_task():
@@ -123,10 +126,12 @@ def test_help_message(capsys):
         '--eval-ids EVAL_IDS',
         '-l LLM_CONFIG, --llm-config LLM_CONFIG',
         '-n NAME, --name NAME',
+        '--config-file CONFIG_FILE',
+        '--no-auto-continue',
     ]
 
     for element in expected_elements:
         assert element in help_output, f"Expected '{element}' to be in the help message"
 
     option_count = help_output.count('  -')
-    assert option_count == 14, f'Expected 14 options, found {option_count}'
+    assert option_count == 16, f'Expected 16 options, found {option_count}'

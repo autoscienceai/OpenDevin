@@ -1,4 +1,4 @@
-const LATEST_SETTINGS_VERSION = 2;
+export const LATEST_SETTINGS_VERSION = 4;
 
 export type Settings = {
   LLM_MODEL: string;
@@ -11,7 +11,7 @@ export type Settings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  LLM_MODEL: "openai/gpt-4o",
+  LLM_MODEL: "anthropic/claude-3-5-sonnet-20241022",
   LLM_BASE_URL: "",
   AGENT: "CodeActAgent",
   LANGUAGE: "en",
@@ -35,10 +35,11 @@ export const getCurrentSettingsVersion = () => {
 export const settingsAreUpToDate = () =>
   getCurrentSettingsVersion() === LATEST_SETTINGS_VERSION;
 
-export const maybeMigrateSettings = () => {
+export const maybeMigrateSettings = (logout: () => void) => {
   // Sometimes we ship major changes, like a new default agent.
   // In this case, we may want to override a previous choice made by the user.
   const currentVersion = getCurrentSettingsVersion();
+
   if (currentVersion < 1) {
     localStorage.setItem("AGENT", DEFAULT_SETTINGS.AGENT);
   }
@@ -49,6 +50,13 @@ export const maybeMigrateSettings = () => {
     }
     localStorage.removeItem("CUSTOM_LLM_MODEL");
     localStorage.removeItem("USING_CUSTOM_MODEL");
+  }
+  if (currentVersion < 3) {
+    localStorage.removeItem("token");
+  }
+
+  if (currentVersion < 4) {
+    logout();
   }
 };
 
@@ -87,10 +95,10 @@ export const getSettings = (): Settings => {
 export const saveSettings = (settings: Partial<Settings>) => {
   Object.keys(settings).forEach((key) => {
     const isValid = validKeys.includes(key as keyof Settings);
-    const value = settings[key as keyof Settings];
-
-    if (isValid && typeof value !== "undefined")
-      localStorage.setItem(key, value.toString());
+    if (!isValid) return;
+    let value = settings[key as keyof Settings];
+    if (value === undefined || value === null) value = "";
+    localStorage.setItem(key, value.toString().trim());
   });
   localStorage.setItem("SETTINGS_VERSION", LATEST_SETTINGS_VERSION.toString());
 };

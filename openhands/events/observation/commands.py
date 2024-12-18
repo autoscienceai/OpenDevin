@@ -11,7 +11,9 @@ class CmdOutputObservation(Observation):
     command_id: int
     command: str
     exit_code: int = 0
+    hidden: bool = False
     observation: str = ObservationType.RUN
+    interpreter_details: str = ''
 
     @property
     def error(self) -> bool:
@@ -20,6 +22,10 @@ class CmdOutputObservation(Observation):
     @property
     def message(self) -> str:
         return f'Command `{self.command}` executed with exit code {self.exit_code}.'
+
+    @property
+    def success(self) -> bool:
+        return not self.error
 
     def __str__(self) -> str:
         return f'**CmdOutputObservation (source={self.source}, exit code={self.exit_code})**\n{self.content}'
@@ -39,6 +45,10 @@ class IPythonRunCellObservation(Observation):
     @property
     def message(self) -> str:
         return 'Code executed in IPython cell.'
+
+    @property
+    def success(self) -> bool:
+        return True  # IPython cells are always considered successful
 
     def __str__(self) -> str:
         return f'**IPythonRunCellObservation**\n{self.content}'

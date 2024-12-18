@@ -6,14 +6,12 @@ import pytest
 import yaml
 from pytest import TempPathFactory
 
-from agenthub.micro.registry import all_microagents
+from openhands.agenthub.micro.registry import all_microagents
 from openhands.controller.agent import Agent
 from openhands.controller.state.state import State
 from openhands.core.config import AgentConfig
-from openhands.events import EventSource
 from openhands.events.action import MessageAction
 from openhands.events.stream import EventStream
-from openhands.memory.history import ShortTermHistory
 from openhands.storage import get_file_store
 
 
@@ -44,7 +42,7 @@ def test_all_agents_are_loaded():
     assert all_microagents is not None
     assert len(all_microagents) > 1
 
-    base = os.path.join('agenthub', 'micro')
+    base = os.path.join('openhands', 'agenthub', 'micro')
     full_path = os.path.dirname(__file__) + '/../../' + base
     agent_names = set()
     for root, _, files in os.walk(full_path):
@@ -74,10 +72,10 @@ def test_coder_agent_with_summary(event_stream: EventStream, agent_configs: dict
     )
     assert coder_agent is not None
 
+    # give it some history
     task = 'This is a dummy task'
-    history = ShortTermHistory()
-    history.set_event_stream(event_stream)
-    event_stream.add_event(MessageAction(content=task), EventSource.USER)
+    history = list()
+    history.append(MessageAction(content=task))
 
     summary = 'This is a dummy summary about this repo'
     state = State(history=history, inputs={'summary': summary})
@@ -119,10 +117,10 @@ def test_coder_agent_without_summary(event_stream: EventStream, agent_configs: d
     )
     assert coder_agent is not None
 
+    # give it some history
     task = 'This is a dummy task'
-    history = ShortTermHistory()
-    history.set_event_stream(event_stream)
-    event_stream.add_event(MessageAction(content=task), EventSource.USER)
+    history = list()
+    history.append(MessageAction(content=task))
 
     # set state without codebase summary
     state = State(history=history)

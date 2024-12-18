@@ -1,6 +1,7 @@
 from openhands.controller.state.state import State
 from openhands.core.logger import openhands_logger as logger
 from openhands.events.action.action import Action
+from openhands.events.action.commands import IPythonRunCellAction
 from openhands.events.action.empty import NullAction
 from openhands.events.action.message import MessageAction
 from openhands.events.event import Event, EventSource
@@ -23,17 +24,44 @@ class StuckDetector:
     def __init__(self, state: State):
         self.state = state
 
-    def is_stuck(self):
-        # filter out MessageAction with source='user' from history
+    def is_stuck(self, headless_mode: bool = True):
+        """Checks if the agent is stuck in a loop.
+
+        Args:
+            headless_mode: Matches AgentController's headless_mode.
+                          If True: Consider all history (automated/testing)
+                          If False: Consider only history after last user message (interactive)
+
+        Returns:
+            bool: True if the agent is stuck in a loop, False otherwise.
+        """
+        if not headless_mode:
+            # In interactive mode, only look at history after the last user message
+            last_user_msg_idx = -1
+            for i, event in enumerate(reversed(self.state.history)):
+                if (
+                    isinstance(event, MessageAction)
+                    and event.source == EventSource.USER
+                ):
+                    last_user_msg_idx = len(self.state.history) - i - 1
+                    break
+
+            history_to_check = self.state.history[last_user_msg_idx + 1 :]
+        else:
+            # In headless mode, look at all history
+            history_to_check = self.state.history
+
+        # Filter out user messages and null events
         filtered_history = [
             event
-            for event in self.state.history.get_events()
+            for event in history_to_check
             if not (
+                # Filter works elegantly in both modes:
+                # - In headless: actively filters out user messages from full history
+                # - In non-headless: no-op since we already sliced after last user message
                 (isinstance(event, MessageAction) and event.source == EventSource.USER)
-                or
                 # there might be some NullAction or NullObservation in the history at least for now
-                isinstance(event, NullAction)
-                or isinstance(event, NullObservation)
+                or isinstance(event, (NullAction, NullObservation))
             )
         ]
 
@@ -81,43 +109,19 @@ class StuckDetector:
         # it takes 4 actions and 4 observations to detect a loop
         # assert len(last_actions) == 4 and len(last_observations) == 4
 
-        # reset almost_stuck reminder
-        self.state.almost_stuck = 0
-
-        # almost stuck? if two actions, obs are the same, we're almost stuck
-        if len(last_actions) >= 2 and len(last_observations) >= 2:
+        # Check for a loop of 4 identical action-observation pairs
+        if len(last_actions) == 4 and len(last_observations) == 4:
             actions_equal = all(
-                self._eq_no_pid(last_actions[0], action) for action in last_actions[:2]
+                self._eq_no_pid(last_actions[0], action) for action in last_actions
             )
             observations_equal = all(
                 self._eq_no_pid(last_observations[0], observation)
-                for observation in last_observations[:2]
+                for observation in last_observations
             )
 
-            # the last two actions and obs are the same?
             if actions_equal and observations_equal:
-                self.state.almost_stuck = 2
-
-            # the last three actions and observations are the same?
-            if len(last_actions) >= 3 and len(last_observations) >= 3:
-                if (
-                    actions_equal
-                    and observations_equal
-                    and self._eq_no_pid(last_actions[0], last_actions[2])
-                    and self._eq_no_pid(last_observations[0], last_observations[2])
-                ):
-                    self.state.almost_stuck = 1
-
-            if len(last_actions) == 4 and len(last_observations) == 4:
-                if (
-                    actions_equal
-                    and observations_equal
-                    and self._eq_no_pid(last_actions[0], last_actions[3])
-                    and self._eq_no_pid(last_observations[0], last_observations[3])
-                ):
-                    logger.warning('Action, Observation loop detected')
-                    self.state.almost_stuck = 0
-                    return True
+                logger.warning('Action, Observation loop detected')
+                return True
 
         return False
 
@@ -150,15 +154,14 @@ class StuckDetector:
                         ):
                             logger.warning(warning)
                             return True
-                    elif error_message in [
+                    elif error_message in (
                         'SyntaxError: invalid syntax. Perhaps you forgot a comma?',
                         'SyntaxError: incomplete input',
-                    ]:
-                        if self._check_for_consistent_invalid_syntax(
-                            last_observations[:3], error_message
-                        ):
-                            logger.warning(warning)
-                            return True
+                    ) and self._check_for_consistent_invalid_syntax(
+                        last_observations[:3], error_message
+                    ):
+                        logger.warning(warning)
+                        return True
         return False
 
     def _check_for_consistent_invalid_syntax(self, observations, error_message):
@@ -169,18 +172,22 @@ class StuckDetector:
             content = obs.content
             lines = content.strip().split('\n')
 
-            if len(lines) < 4:
+            if len(lines) < 6:  # 6 because a real syntax error has at least 6 lines
                 return False
 
-            first_lines.append(lines[0])  # Store the first line of each observation
+            line1 = lines[0].strip()
+            if not line1.startswith('Cell In[1], line'):
+                return False
+
+            first_lines.append(line1)  # Store the first line of each observation
 
             # Check last three lines
-            if lines[-2].startswith('[Jupyter current working directory:') and lines[
-                -1
-            ].startswith('[Jupyter Python interpreter:'):
-                if error_message in lines[-3]:
-                    valid_observations.append(obs)
-                    break
+            if (
+                lines[-1].startswith('[Jupyter Python interpreter:')
+                and lines[-2].startswith('[Jupyter current working directory:')
+                and error_message in lines[-3]
+            ):
+                valid_observations.append(obs)
 
         # Check if:
         # 1. All first lines are identical
@@ -302,7 +309,23 @@ class StuckDetector:
         return False
 
     def _eq_no_pid(self, obj1, obj2):
-        if isinstance(obj1, CmdOutputObservation) and isinstance(
+        if isinstance(obj1, IPythonRunCellAction) and isinstance(
+            obj2, IPythonRunCellAction
+        ):
+            # for loop detection on edit actions, ignore the thought, compare some code
+            # the code should have at least 3 lines, to avoid simple one-liners
+            if (
+                'edit_file_by_replace(' in obj1.code
+                and 'edit_file_by_replace(' in obj2.code
+            ):
+                return (
+                    len(obj1.code.split('\n')) > 2
+                    and obj1.code.split('\n')[:3] == obj2.code.split('\n')[:3]
+                )
+            else:
+                # default comparison
+                return obj1 == obj2
+        elif isinstance(obj1, CmdOutputObservation) and isinstance(
             obj2, CmdOutputObservation
         ):
             # for loop detection, ignore command_id, which is the pid
