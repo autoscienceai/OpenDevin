@@ -3,12 +3,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from openhands.server.shared import openhands_config
+from openhands.utils.async_utils import call_sync_from_async
 
 app = APIRouter(prefix='/api')
 
 
 @app.get('/github/repositories')
-def get_github_repositories(
+async def get_github_repositories(
     request: Request,
     page: int = 1,
     per_page: int = 10,
@@ -44,7 +45,9 @@ def get_github_repositories(
 
     # Fetch repositories from GitHub
     try:
-        response = requests.get(github_api_url, headers=headers, params=params)
+        response = await call_sync_from_async(
+            requests.get, github_api_url, headers=headers, params=params
+        )
         response.raise_for_status()  # Raise an error for HTTP codes >= 400
     except requests.exceptions.RequestException as e:
         raise HTTPException(
@@ -52,5 +55,12 @@ def get_github_repositories(
             detail=f'Error fetching repositories: {str(e)}',
         )
 
-    # Return the JSON response
-    return JSONResponse(content=response.json())
+    # Create response with the JSON content
+    json_response = JSONResponse(content=response.json())
+    response.close()
+
+    # Forward the Link header if it exists
+    if 'Link' in response.headers:
+        json_response.headers['Link'] = response.headers['Link']
+
+    return json_response

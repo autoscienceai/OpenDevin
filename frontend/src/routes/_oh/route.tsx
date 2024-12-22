@@ -44,29 +44,24 @@ export function ErrorBoundary() {
 }
 
 export default function MainApp() {
-  const { gitHubToken, clearToken } = useAuth();
-  const { settings } = useUserPrefs();
+  const { gitHubToken } = useAuth();
+  const { settings, settingsAreUpToDate } = useUserPrefs();
 
   const [consentFormIsOpen, setConsentFormIsOpen] = React.useState(
     !localStorage.getItem("analytics-consent"),
   );
 
+  const [aiConfigModalIsOpen, setAiConfigModalIsOpen] =
+    React.useState(!settingsAreUpToDate);
+
   const config = useConfig();
-  const {
-    data: isAuthed,
-    isFetched,
-    isFetching: isFetchingAuth,
-  } = useIsAuthed();
+  const { data: isAuthed, isFetching: isFetchingAuth } = useIsAuthed();
 
   const gitHubAuthUrl = useGitHubAuthUrl({
     gitHubToken,
     appMode: config.data?.APP_MODE || null,
     gitHubClientId: config.data?.GITHUB_CLIENT_ID || null,
   });
-
-  React.useEffect(() => {
-    if (isFetched && !isAuthed) clearToken();
-  }, [isFetched, isAuthed]);
 
   React.useEffect(() => {
     if (settings.LANGUAGE) {
@@ -76,9 +71,6 @@ export default function MainApp() {
 
   const isInWaitlist =
     !isFetchingAuth && !isAuthed && config.data?.APP_MODE === "saas";
-
-  const { settingsAreUpToDate } = useUserPrefs();
-  const [showAIConfig, setShowAIConfig] = React.useState(true);
 
   return (
     <div
@@ -101,8 +93,11 @@ export default function MainApp() {
         />
       )}
 
-      {(isAuthed || !settingsAreUpToDate) && showAIConfig && (
-        <SettingsModal onClose={() => setShowAIConfig(false)} />
+      {aiConfigModalIsOpen && (
+        <SettingsModal
+          onClose={() => setAiConfigModalIsOpen(false)}
+          data-testid="ai-config-modal"
+        />
       )}
     </div>
   );
