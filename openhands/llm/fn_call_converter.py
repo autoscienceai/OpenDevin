@@ -200,7 +200,6 @@ ASSISTANT:
 Running the updated file:
 <function=execute_bash>
 <parameter=command>
-<parameter=command>
 python3 app.py > server.log 2>&1 &
 </parameter>
 </function>
@@ -224,7 +223,7 @@ IN_CONTEXT_LEARNING_EXAMPLE_SUFFIX = """
 --------------------- END OF NEW TASK DESCRIPTION ---------------------
 
 PLEASE follow the format strictly! PLEASE EMIT ONE AND ONLY ONE FUNCTION CALL PER MESSAGE.
-""".lstrip()
+"""
 
 # Regex patterns for function call parsing
 FN_REGEX_PATTERN = r'<function=([^>]+)>\n(.*?)</function>'
