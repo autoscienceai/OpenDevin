@@ -13,6 +13,7 @@ from openhands.server.types import AppMode
 class ProviderType(Enum):
     GITHUB = 'github'
     GITLAB = 'gitlab'
+    BITBUCKET = 'bitbucket'
 
 
 class TaskType(str, Enum):
@@ -21,6 +22,12 @@ class TaskType(str, Enum):
     UNRESOLVED_COMMENTS = 'UNRESOLVED_COMMENTS'
     OPEN_ISSUE = 'OPEN_ISSUE'
     OPEN_PR = 'OPEN_PR'
+    CREATE_MICROAGENT = 'CREATE_MICROAGENT'
+
+
+class OwnerType(str, Enum):
+    USER = 'user'
+    ORGANIZATION = 'organization'
 
 
 class SuggestedTask(BaseModel):
@@ -31,7 +38,17 @@ class SuggestedTask(BaseModel):
     title: str
 
     def get_provider_terms(self) -> dict:
-        if self.git_provider == ProviderType.GITLAB:
+        if self.git_provider == ProviderType.GITHUB:
+            return {
+                'requestType': 'Pull Request',
+                'requestTypeShort': 'PR',
+                'apiName': 'GitHub API',
+                'tokenEnvVar': 'GITHUB_TOKEN',
+                'ciSystem': 'GitHub Actions',
+                'ciProvider': 'GitHub',
+                'requestVerb': 'pull request',
+            }
+        elif self.git_provider == ProviderType.GITLAB:
             return {
                 'requestType': 'Merge Request',
                 'requestTypeShort': 'MR',
@@ -41,14 +58,14 @@ class SuggestedTask(BaseModel):
                 'ciProvider': 'GitLab',
                 'requestVerb': 'merge request',
             }
-        elif self.git_provider == ProviderType.GITHUB:
+        elif self.git_provider == ProviderType.BITBUCKET:
             return {
                 'requestType': 'Pull Request',
                 'requestTypeShort': 'PR',
-                'apiName': 'GitHub API',
-                'tokenEnvVar': 'GITHUB_TOKEN',
-                'ciSystem': 'GitHub Actions',
-                'ciProvider': 'GitHub',
+                'apiName': 'Bitbucket API',
+                'tokenEnvVar': 'BITBUCKET_TOKEN',
+                'ciSystem': 'Bitbucket Pipelines',
+                'ciProvider': 'Bitbucket',
                 'requestVerb': 'pull request',
             }
 
@@ -82,8 +99,14 @@ class SuggestedTask(BaseModel):
         return template.render(issue_number=issue_number, repo=repo, **terms)
 
 
+class CreateMicroagent(BaseModel):
+    repo: str
+    git_provider: ProviderType | None = None
+    title: str | None = None
+
+
 class User(BaseModel):
-    id: int
+    id: str
     login: str
     avatar_url: str
     company: str | None = None
@@ -91,14 +114,24 @@ class User(BaseModel):
     email: str | None = None
 
 
+class Branch(BaseModel):
+    name: str
+    commit_sha: str
+    protected: bool
+    last_push_date: str | None = None  # ISO 8601 format date string
+
+
 class Repository(BaseModel):
-    id: int
+    id: str
     full_name: str
     git_provider: ProviderType
     is_public: bool
     stargazers_count: int | None = None
     link_header: str | None = None
     pushed_at: str | None = None  # ISO 8601 format date string
+    owner_type: OwnerType | None = (
+        None  # Whether the repository is owned by a user or organization
+    )
 
 
 class AuthenticationError(ValueError):
@@ -160,11 +193,11 @@ class BaseGitService(ABC):
             return RateLimitError('GitHub API rate limit exceeded')
 
         logger.warning(f'Status error on {self.provider} API: {e}')
-        return UnknownException('Unknown error')
+        return UnknownException(f'Unknown error: {e}')
 
     def handle_http_error(self, e: HTTPError) -> UnknownException:
         logger.warning(f'HTTP error on {self.provider} API: {type(e).__name__} : {e}')
-        return UnknownException('Unknown error')
+        return UnknownException(f'HTTP error {type(e).__name__} : {e}')
 
 
 class GitService(Protocol):
@@ -177,6 +210,7 @@ class GitService(Protocol):
         external_auth_id: str | None = None,
         external_auth_token: SecretStr | None = None,
         external_token_manager: bool = False,
+        base_domain: str | None = None,
     ) -> None:
         """Initialize the service with authentication details"""
         ...
@@ -206,3 +240,11 @@ class GitService(Protocol):
     async def get_suggested_tasks(self) -> list[SuggestedTask]:
         """Get suggested tasks for the authenticated user across all repositories"""
         ...
+
+    async def get_repository_details_from_repo_name(
+        self, repository: str
+    ) -> Repository:
+        """Gets all repository details from repository name"""
+
+    async def get_branches(self, repository: str) -> list[Branch]:
+        """Get branches for a repository"""

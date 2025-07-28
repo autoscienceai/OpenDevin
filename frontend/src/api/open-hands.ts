@@ -1,3 +1,4 @@
+import { AxiosHeaders } from "axios";
 import {
   Feedback,
   FeedbackResponse,
@@ -10,14 +11,49 @@ import {
   GetTrajectoryResponse,
   GitChangeDiff,
   GitChange,
-  ConversationTrigger,
+  GetMicroagentsResponse,
+  GetMicroagentPromptResponse,
+  CreateMicroagent,
 } from "./open-hands.types";
 import { openHands } from "./open-hands-axios";
-import { ApiSettings, PostApiSettings } from "#/types/settings";
-import { GitUser, GitRepository } from "#/types/git";
+import { ApiSettings, PostApiSettings, Provider } from "#/types/settings";
+import { GitUser, GitRepository, Branch } from "#/types/git";
 import { SuggestedTask } from "#/components/features/home/tasks/task.types";
+import { RepositoryMicroagent } from "#/types/microagent-management";
 
 class OpenHands {
+  private static currentConversation: Conversation | null = null;
+
+  /**
+   * Get a current conversation
+   * @return the current conversation
+   */
+  static getCurrentConversation(): Conversation | null {
+    return this.currentConversation;
+  }
+
+  /**
+   * Set a current conversation
+   * @param url Custom URL to use for conversation endpoints
+   */
+  static setCurrentConversation(
+    currentConversation: Conversation | null,
+  ): void {
+    this.currentConversation = currentConversation;
+  }
+
+  /**
+   * Get the url for the conversation. If
+   */
+  static getConversationUrl(conversationId: string): string {
+    if (this.currentConversation?.conversation_id === conversationId) {
+      if (this.currentConversation.url) {
+        return this.currentConversation.url;
+      }
+    }
+    return `/api/conversations/${conversationId}`;
+  }
+
   /**
    * Retrieve the list of models available
    * @returns List of models available
@@ -54,6 +90,15 @@ class OpenHands {
     return data;
   }
 
+  static getConversationHeaders(): AxiosHeaders {
+    const headers = new AxiosHeaders();
+    const sessionApiKey = this.currentConversation?.session_api_key;
+    if (sessionApiKey) {
+      headers.set("X-Session-API-Key", sessionApiKey);
+    }
+    return headers;
+  }
+
   /**
    * Send feedback to the server
    * @param data Feedback data
@@ -69,6 +114,59 @@ class OpenHands {
   }
 
   /**
+   * Submit conversation feedback with rating
+   * @param conversationId The conversation ID
+   * @param rating The rating (1-5)
+   * @param eventId Optional event ID this feedback corresponds to
+   * @param reason Optional reason for the rating
+   * @returns Response from the feedback endpoint
+   */
+  static async submitConversationFeedback(
+    conversationId: string,
+    rating: number,
+    eventId?: number,
+    reason?: string,
+  ): Promise<{ status: string; message: string }> {
+    const url = `/feedback/conversation`;
+    const payload = {
+      conversation_id: conversationId,
+      event_id: eventId,
+      rating,
+      reason,
+      metadata: { source: "likert-scale" },
+    };
+    const { data } = await openHands.post<{ status: string; message: string }>(
+      url,
+      payload,
+    );
+    return data;
+  }
+
+  /**
+   * Check if feedback exists for a specific conversation and event
+   * @param conversationId The conversation ID
+   * @param eventId The event ID to check
+   * @returns Feedback data including existence, rating, and reason
+   */
+  static async checkFeedbackExists(
+    conversationId: string,
+    eventId: number,
+  ): Promise<{ exists: boolean; rating?: number; reason?: string }> {
+    try {
+      const url = `/feedback/conversation/${conversationId}/${eventId}`;
+      const { data } = await openHands.get<{
+        exists: boolean;
+        rating?: number;
+        reason?: string;
+      }>(url);
+      return data;
+    } catch (error) {
+      // Error checking if feedback exists
+      return { exists: false };
+    }
+  }
+
+  /**
    * Authenticate with GitHub token
    * @returns Response with authentication status and user info if successful
    */
@@ -77,9 +175,9 @@ class OpenHands {
   ): Promise<boolean> {
     if (appMode === "oss") return true;
 
-    const response =
-      await openHands.post<AuthenticateResponse>("/api/authenticate");
-    return response.status === 200;
+    // Just make the request, if it succeeds (no exception thrown), return true
+    await openHands.post<AuthenticateResponse>("/api/authenticate");
+    return true;
   }
 
   /**
@@ -87,11 +185,24 @@ class OpenHands {
    * @returns Blob of the workspace zip
    */
   static async getWorkspaceZip(conversationId: string): Promise<Blob> {
-    const url = `/api/conversations/${conversationId}/zip-directory`;
+    const url = `${this.getConversationUrl(conversationId)}/zip-directory`;
     const response = await openHands.get(url, {
       responseType: "blob",
+      headers: this.getConversationHeaders(),
     });
     return response.data;
+  }
+
+  /**
+   * Get the web hosts
+   * @returns Array of web hosts
+   */
+  static async getWebHosts(conversationId: string): Promise<string[]> {
+    const url = `${this.getConversationUrl(conversationId)}/web-hosts`;
+    const response = await openHands.get(url, {
+      headers: this.getConversationHeaders(),
+    });
+    return Object.keys(response.data.hosts);
   }
 
   /**
@@ -117,24 +228,48 @@ class OpenHands {
   static async getVSCodeUrl(
     conversationId: string,
   ): Promise<GetVSCodeUrlResponse> {
-    const { data } = await openHands.get<GetVSCodeUrlResponse>(
-      `/api/conversations/${conversationId}/vscode-url`,
-    );
+    const url = `${this.getConversationUrl(conversationId)}/vscode-url`;
+    const { data } = await openHands.get<GetVSCodeUrlResponse>(url, {
+      headers: this.getConversationHeaders(),
+    });
     return data;
   }
 
   static async getRuntimeId(
     conversationId: string,
   ): Promise<{ runtime_id: string }> {
-    const { data } = await openHands.get<{ runtime_id: string }>(
-      `/api/conversations/${conversationId}/config`,
-    );
+    const url = `${this.getConversationUrl(conversationId)}/config`;
+    const { data } = await openHands.get<{ runtime_id: string }>(url, {
+      headers: this.getConversationHeaders(),
+    });
     return data;
   }
 
   static async getUserConversations(): Promise<Conversation[]> {
     const { data } = await openHands.get<ResultSet<Conversation>>(
-      "/api/conversations?limit=9",
+      "/api/conversations?limit=20",
+    );
+    return data.results;
+  }
+
+  static async searchConversations(
+    selectedRepository?: string,
+    conversationTrigger?: string,
+    limit: number = 20,
+  ): Promise<Conversation[]> {
+    const params = new URLSearchParams();
+    params.append("limit", limit.toString());
+
+    if (selectedRepository) {
+      params.append("selected_repository", selectedRepository);
+    }
+
+    if (conversationTrigger) {
+      params.append("conversation_trigger", conversationTrigger);
+    }
+
+    const { data } = await openHands.get<ResultSet<Conversation>>(
+      `/api/conversations?${params.toString()}`,
     );
     return data.results;
   }
@@ -143,29 +278,23 @@ class OpenHands {
     await openHands.delete(`/api/conversations/${conversationId}`);
   }
 
-  static async updateUserConversation(
-    conversationId: string,
-    conversation: Partial<Omit<Conversation, "conversation_id">>,
-  ): Promise<void> {
-    await openHands.patch(`/api/conversations/${conversationId}`, conversation);
-  }
-
   static async createConversation(
-    conversation_trigger: ConversationTrigger = "gui",
-    selectedRepository?: GitRepository,
+    selectedRepository?: string,
+    git_provider?: Provider,
     initialUserMsg?: string,
-    imageUrls?: string[],
-    replayJson?: string,
     suggested_task?: SuggestedTask,
+    selected_branch?: string,
+    conversationInstructions?: string,
+    createMicroagent?: CreateMicroagent,
   ): Promise<Conversation> {
     const body = {
-      conversation_trigger,
-      selected_repository: selectedRepository,
-      selected_branch: undefined,
+      repository: selectedRepository,
+      git_provider,
+      selected_branch,
       initial_user_msg: initialUserMsg,
-      image_urls: imageUrls,
-      replay_json: replayJson,
       suggested_task,
+      conversation_instructions: conversationInstructions,
+      create_microagent: createMicroagent,
     };
 
     const { data } = await openHands.post<Conversation>(
@@ -181,6 +310,28 @@ class OpenHands {
   ): Promise<Conversation | null> {
     const { data } = await openHands.get<Conversation | null>(
       `/api/conversations/${conversationId}`,
+    );
+
+    return data;
+  }
+
+  static async startConversation(
+    conversationId: string,
+    providers?: Provider[],
+  ): Promise<Conversation | null> {
+    const { data } = await openHands.post<Conversation | null>(
+      `/api/conversations/${conversationId}/start`,
+      providers ? { providers_set: providers } : {},
+    );
+
+    return data;
+  }
+
+  static async stopConversation(
+    conversationId: string,
+  ): Promise<Conversation | null> {
+    const { data } = await openHands.post<Conversation | null>(
+      `/api/conversations/${conversationId}/stop`,
     );
 
     return data;
@@ -266,22 +417,24 @@ class OpenHands {
   static async getTrajectory(
     conversationId: string,
   ): Promise<GetTrajectoryResponse> {
-    const { data } = await openHands.get<GetTrajectoryResponse>(
-      `/api/conversations/${conversationId}/trajectory`,
-    );
+    const url = `${this.getConversationUrl(conversationId)}/trajectory`;
+    const { data } = await openHands.get<GetTrajectoryResponse>(url, {
+      headers: this.getConversationHeaders(),
+    });
     return data;
   }
 
   static async logout(appMode: GetConfigResponse["APP_MODE"]): Promise<void> {
     const endpoint =
-      appMode === "saas" ? "/api/logout" : "/api/unset-settings-tokens";
+      appMode === "saas" ? "/api/logout" : "/api/unset-provider-tokens";
     await openHands.post(endpoint);
   }
 
   static async getGitChanges(conversationId: string): Promise<GitChange[]> {
-    const { data } = await openHands.get<GitChange[]>(
-      `/api/conversations/${conversationId}/git/changes`,
-    );
+    const url = `${this.getConversationUrl(conversationId)}/git/changes`;
+    const { data } = await openHands.get<GitChange[]>(url, {
+      headers: this.getConversationHeaders(),
+    });
     return data;
   }
 
@@ -289,12 +442,93 @@ class OpenHands {
     conversationId: string,
     path: string,
   ): Promise<GitChangeDiff> {
-    const { data } = await openHands.get<GitChangeDiff>(
-      `/api/conversations/${conversationId}/git/diff`,
+    const url = `${this.getConversationUrl(conversationId)}/git/diff`;
+    const { data } = await openHands.get<GitChangeDiff>(url, {
+      params: { path },
+      headers: this.getConversationHeaders(),
+    });
+    return data;
+  }
+
+  /**
+   * Given a PAT, retrieves the repositories of the user
+   * @returns A list of repositories
+   */
+  static async retrieveUserGitRepositories() {
+    const { data } = await openHands.get<GitRepository[]>(
+      "/api/user/repositories",
       {
-        params: { path },
+        params: {
+          sort: "pushed",
+        },
       },
     );
+
+    return data;
+  }
+
+  static async getRepositoryBranches(repository: string): Promise<Branch[]> {
+    const { data } = await openHands.get<Branch[]>(
+      `/api/user/repository/branches?repository=${encodeURIComponent(repository)}`,
+    );
+
+    return data;
+  }
+
+  /**
+   * Get the available microagents associated with a conversation
+   * @param conversationId The ID of the conversation
+   * @returns The available microagents associated with the conversation
+   */
+  static async getMicroagents(
+    conversationId: string,
+  ): Promise<GetMicroagentsResponse> {
+    const url = `${this.getConversationUrl(conversationId)}/microagents`;
+    const { data } = await openHands.get<GetMicroagentsResponse>(url, {
+      headers: this.getConversationHeaders(),
+    });
+    return data;
+  }
+
+  /**
+   * Get the available microagents for a specific repository
+   * @param owner The repository owner
+   * @param repo The repository name
+   * @returns The available microagents for the repository
+   */
+  static async getRepositoryMicroagents(
+    owner: string,
+    repo: string,
+  ): Promise<RepositoryMicroagent[]> {
+    const { data } = await openHands.get<RepositoryMicroagent[]>(
+      `/api/user/repository/${owner}/${repo}/microagents`,
+    );
+    return data;
+  }
+
+  static async getMicroagentPrompt(
+    conversationId: string,
+    eventId: number,
+  ): Promise<string> {
+    const { data } = await openHands.get<GetMicroagentPromptResponse>(
+      `/api/conversations/${conversationId}/remember_prompt`,
+      {
+        params: { event_id: eventId },
+      },
+    );
+
+    return data.prompt;
+  }
+
+  static async updateConversation(
+    conversationId: string,
+    updates: { title: string },
+  ): Promise<boolean> {
+    const { data } = await openHands.patch<boolean>(
+      `/api/conversations/${conversationId}`,
+      updates,
+    );
+
     return data;
   }
 }

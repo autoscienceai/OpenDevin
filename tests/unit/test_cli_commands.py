@@ -2,17 +2,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.core.cli_commands import (
+from openhands.cli.commands import (
+    display_mcp_servers,
     handle_commands,
     handle_exit_command,
     handle_help_command,
     handle_init_command,
+    handle_mcp_command,
     handle_new_command,
+    handle_resume_command,
     handle_settings_command,
     handle_status_command,
 )
-from openhands.core.cli_tui import UsageMetrics
-from openhands.core.config import AppConfig
+from openhands.cli.tui import UsageMetrics
+from openhands.core.config import OpenHandsConfig
 from openhands.core.schema import AgentState
 from openhands.events import EventSource
 from openhands.events.action import ChangeAgentStateAction, MessageAction
@@ -26,7 +29,7 @@ class TestHandleCommands:
         event_stream = MagicMock(spec=EventStream)
         usage_metrics = MagicMock(spec=UsageMetrics)
         sid = 'test-session-id'
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         current_dir = '/test/dir'
         settings_store = MagicMock(spec=FileSettingsStore)
 
@@ -40,15 +43,16 @@ class TestHandleCommands:
         }
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.handle_exit_command')
+    @patch('openhands.cli.commands.handle_exit_command')
     async def test_handle_exit_command(self, mock_handle_exit, mock_dependencies):
         mock_handle_exit.return_value = True
 
-        close_repl, reload_microagents, new_session = await handle_commands(
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
             '/exit', **mock_dependencies
         )
 
         mock_handle_exit.assert_called_once_with(
+            mock_dependencies['config'],
             mock_dependencies['event_stream'],
             mock_dependencies['usage_metrics'],
             mock_dependencies['sid'],
@@ -58,11 +62,11 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.handle_help_command')
+    @patch('openhands.cli.commands.handle_help_command')
     async def test_handle_help_command(self, mock_handle_help, mock_dependencies):
         mock_handle_help.return_value = (False, False, False)
 
-        close_repl, reload_microagents, new_session = await handle_commands(
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
             '/help', **mock_dependencies
         )
 
@@ -72,11 +76,11 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.handle_init_command')
+    @patch('openhands.cli.commands.handle_init_command')
     async def test_handle_init_command(self, mock_handle_init, mock_dependencies):
         mock_handle_init.return_value = (True, True)
 
-        close_repl, reload_microagents, new_session = await handle_commands(
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
             '/init', **mock_dependencies
         )
 
@@ -90,11 +94,11 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.handle_status_command')
+    @patch('openhands.cli.commands.handle_status_command')
     async def test_handle_status_command(self, mock_handle_status, mock_dependencies):
         mock_handle_status.return_value = (False, False, False)
 
-        close_repl, reload_microagents, new_session = await handle_commands(
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
             '/status', **mock_dependencies
         )
 
@@ -106,15 +110,16 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.handle_new_command')
+    @patch('openhands.cli.commands.handle_new_command')
     async def test_handle_new_command(self, mock_handle_new, mock_dependencies):
         mock_handle_new.return_value = (True, True)
 
-        close_repl, reload_microagents, new_session = await handle_commands(
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
             '/new', **mock_dependencies
         )
 
         mock_handle_new.assert_called_once_with(
+            mock_dependencies['config'],
             mock_dependencies['event_stream'],
             mock_dependencies['usage_metrics'],
             mock_dependencies['sid'],
@@ -124,11 +129,11 @@ class TestHandleCommands:
         assert new_session is True
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.handle_settings_command')
+    @patch('openhands.cli.commands.handle_settings_command')
     async def test_handle_settings_command(
         self, mock_handle_settings, mock_dependencies
     ):
-        close_repl, reload_microagents, new_session = await handle_commands(
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
             '/settings', **mock_dependencies
         )
 
@@ -141,10 +146,22 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
+    @patch('openhands.cli.commands.handle_mcp_command')
+    async def test_handle_mcp_command(self, mock_handle_mcp, mock_dependencies):
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
+            '/mcp', **mock_dependencies
+        )
+
+        mock_handle_mcp.assert_called_once_with(mock_dependencies['config'])
+        assert close_repl is False
+        assert reload_microagents is False
+        assert new_session is False
+
+    @pytest.mark.asyncio
     async def test_handle_unknown_command(self, mock_dependencies):
         user_message = 'Hello, this is not a command'
 
-        close_repl, reload_microagents, new_session = await handle_commands(
+        close_repl, reload_microagents, new_session, _ = await handle_commands(
             user_message, **mock_dependencies
         )
 
@@ -162,9 +179,10 @@ class TestHandleCommands:
 
 
 class TestHandleExitCommand:
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.display_shutdown_message')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.display_shutdown_message')
     def test_exit_with_confirmation(self, mock_display_shutdown, mock_cli_confirm):
+        config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
         usage_metrics = MagicMock(spec=UsageMetrics)
         sid = 'test-session-id'
@@ -173,7 +191,7 @@ class TestHandleExitCommand:
         mock_cli_confirm.return_value = 0  # First option, which is "Yes, proceed"
 
         # Call the function under test
-        result = handle_exit_command(event_stream, usage_metrics, sid)
+        result = handle_exit_command(config, event_stream, usage_metrics, sid)
 
         # Verify correct behavior
         mock_cli_confirm.assert_called_once()
@@ -187,9 +205,10 @@ class TestHandleExitCommand:
         mock_display_shutdown.assert_called_once_with(usage_metrics, sid)
         assert result is True
 
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.display_shutdown_message')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.display_shutdown_message')
     def test_exit_without_confirmation(self, mock_display_shutdown, mock_cli_confirm):
+        config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
         usage_metrics = MagicMock(spec=UsageMetrics)
         sid = 'test-session-id'
@@ -198,7 +217,7 @@ class TestHandleExitCommand:
         mock_cli_confirm.return_value = 1  # Second option, which is "No, dismiss"
 
         # Call the function under test
-        result = handle_exit_command(event_stream, usage_metrics, sid)
+        result = handle_exit_command(config, event_stream, usage_metrics, sid)
 
         # Verify correct behavior
         mock_cli_confirm.assert_called_once()
@@ -208,14 +227,86 @@ class TestHandleExitCommand:
 
 
 class TestHandleHelpCommand:
-    @patch('openhands.core.cli_commands.display_help')
+    @patch('openhands.cli.commands.display_help')
     def test_help_command(self, mock_display_help):
         handle_help_command()
         mock_display_help.assert_called_once()
 
 
+class TestDisplayMcpServers:
+    @patch('openhands.cli.commands.print_formatted_text')
+    def test_display_mcp_servers_no_servers(self, mock_print):
+        from openhands.core.config.mcp_config import MCPConfig
+
+        config = MagicMock(spec=OpenHandsConfig)
+        config.mcp = MCPConfig()  # Empty config with no servers
+
+        display_mcp_servers(config)
+
+        mock_print.assert_called_once()
+        call_args = mock_print.call_args[0][0]
+        assert 'No custom MCP servers configured' in call_args
+        assert (
+            'https://docs.all-hands.dev/usage/how-to/cli-mode#using-mcp-servers'
+            in call_args
+        )
+
+    @patch('openhands.cli.commands.print_formatted_text')
+    def test_display_mcp_servers_with_servers(self, mock_print):
+        from openhands.core.config.mcp_config import (
+            MCPConfig,
+            MCPSHTTPServerConfig,
+            MCPSSEServerConfig,
+            MCPStdioServerConfig,
+        )
+
+        config = MagicMock(spec=OpenHandsConfig)
+        config.mcp = MCPConfig(
+            sse_servers=[MCPSSEServerConfig(url='https://example.com/sse')],
+            stdio_servers=[MCPStdioServerConfig(name='tavily', command='npx')],
+            shttp_servers=[MCPSHTTPServerConfig(url='http://localhost:3000/mcp')],
+        )
+
+        display_mcp_servers(config)
+
+        # Should be called multiple times for different sections
+        assert mock_print.call_count >= 4
+
+        # Check that the summary is printed
+        first_call = mock_print.call_args_list[0][0][0]
+        assert 'Configured MCP servers:' in first_call
+        assert 'SSE servers: 1' in first_call
+        assert 'Stdio servers: 1' in first_call
+        assert 'SHTTP servers: 1' in first_call
+        assert 'Total: 3' in first_call
+
+
+class TestHandleMcpCommand:
+    @pytest.mark.asyncio
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.display_mcp_servers')
+    async def test_handle_mcp_command_list_action(self, mock_display, mock_cli_confirm):
+        config = MagicMock(spec=OpenHandsConfig)
+        mock_cli_confirm.return_value = 0  # List action
+
+        await handle_mcp_command(config)
+
+        mock_cli_confirm.assert_called_once_with(
+            config,
+            'MCP Server Configuration',
+            [
+                'List configured servers',
+                'Add new server',
+                'Remove server',
+                'View errors',
+                'Go back',
+            ],
+        )
+        mock_display.assert_called_once_with(config)
+
+
 class TestHandleStatusCommand:
-    @patch('openhands.core.cli_commands.display_status')
+    @patch('openhands.cli.commands.display_status')
     def test_status_command(self, mock_display_status):
         usage_metrics = MagicMock(spec=UsageMetrics)
         sid = 'test-session-id'
@@ -226,9 +317,10 @@ class TestHandleStatusCommand:
 
 
 class TestHandleNewCommand:
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.display_shutdown_message')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.display_shutdown_message')
     def test_new_with_confirmation(self, mock_display_shutdown, mock_cli_confirm):
+        config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
         usage_metrics = MagicMock(spec=UsageMetrics)
         sid = 'test-session-id'
@@ -237,7 +329,9 @@ class TestHandleNewCommand:
         mock_cli_confirm.return_value = 0  # First option, which is "Yes, proceed"
 
         # Call the function under test
-        close_repl, new_session = handle_new_command(event_stream, usage_metrics, sid)
+        close_repl, new_session = handle_new_command(
+            config, event_stream, usage_metrics, sid
+        )
 
         # Verify correct behavior
         mock_cli_confirm.assert_called_once()
@@ -252,9 +346,10 @@ class TestHandleNewCommand:
         assert close_repl is True
         assert new_session is True
 
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.display_shutdown_message')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.display_shutdown_message')
     def test_new_without_confirmation(self, mock_display_shutdown, mock_cli_confirm):
+        config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
         usage_metrics = MagicMock(spec=UsageMetrics)
         sid = 'test-session-id'
@@ -263,7 +358,9 @@ class TestHandleNewCommand:
         mock_cli_confirm.return_value = 1  # Second option, which is "No, dismiss"
 
         # Call the function under test
-        close_repl, new_session = handle_new_command(event_stream, usage_metrics, sid)
+        close_repl, new_session = handle_new_command(
+            config, event_stream, usage_metrics, sid
+        )
 
         # Verify correct behavior
         mock_cli_confirm.assert_called_once()
@@ -275,9 +372,9 @@ class TestHandleNewCommand:
 
 class TestHandleInitCommand:
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.init_repository')
+    @patch('openhands.cli.commands.init_repository')
     async def test_init_local_runtime_successful(self, mock_init_repository):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         config.runtime = 'local'
         event_stream = MagicMock(spec=EventStream)
         current_dir = '/test/dir'
@@ -291,7 +388,7 @@ class TestHandleInitCommand:
         )
 
         # Verify correct behavior
-        mock_init_repository.assert_called_once_with(current_dir)
+        mock_init_repository.assert_called_once_with(config, current_dir)
         event_stream.add_event.assert_called_once()
         # Check event is the right type
         args, kwargs = event_stream.add_event.call_args
@@ -303,9 +400,9 @@ class TestHandleInitCommand:
         assert reload_microagents is True
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.init_repository')
+    @patch('openhands.cli.commands.init_repository')
     async def test_init_local_runtime_unsuccessful(self, mock_init_repository):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         config.runtime = 'local'
         event_stream = MagicMock(spec=EventStream)
         current_dir = '/test/dir'
@@ -319,17 +416,17 @@ class TestHandleInitCommand:
         )
 
         # Verify correct behavior
-        mock_init_repository.assert_called_once_with(current_dir)
+        mock_init_repository.assert_called_once_with(config, current_dir)
         event_stream.add_event.assert_not_called()
 
         assert close_repl is False
         assert reload_microagents is False
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.print_formatted_text')
-    @patch('openhands.core.cli_commands.init_repository')
+    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('openhands.cli.commands.init_repository')
     async def test_init_non_local_runtime(self, mock_init_repository, mock_print):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         config.runtime = 'remote'  # Not local
         event_stream = MagicMock(spec=EventStream)
         current_dir = '/test/dir'
@@ -350,16 +447,16 @@ class TestHandleInitCommand:
 
 class TestHandleSettingsCommand:
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.display_settings')
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.modify_llm_settings_basic')
+    @patch('openhands.cli.commands.display_settings')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.modify_llm_settings_basic')
     async def test_settings_basic_with_changes(
         self,
         mock_modify_basic,
         mock_cli_confirm,
         mock_display_settings,
     ):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         settings_store = MagicMock(spec=FileSettingsStore)
 
         # Mock user selecting "Basic" settings
@@ -374,16 +471,16 @@ class TestHandleSettingsCommand:
         mock_modify_basic.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.display_settings')
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.modify_llm_settings_basic')
+    @patch('openhands.cli.commands.display_settings')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.modify_llm_settings_basic')
     async def test_settings_basic_without_changes(
         self,
         mock_modify_basic,
         mock_cli_confirm,
         mock_display_settings,
     ):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         settings_store = MagicMock(spec=FileSettingsStore)
 
         # Mock user selecting "Basic" settings
@@ -398,16 +495,16 @@ class TestHandleSettingsCommand:
         mock_modify_basic.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.display_settings')
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.modify_llm_settings_advanced')
+    @patch('openhands.cli.commands.display_settings')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.modify_llm_settings_advanced')
     async def test_settings_advanced_with_changes(
         self,
         mock_modify_advanced,
         mock_cli_confirm,
         mock_display_settings,
     ):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         settings_store = MagicMock(spec=FileSettingsStore)
 
         # Mock user selecting "Advanced" settings
@@ -422,16 +519,16 @@ class TestHandleSettingsCommand:
         mock_modify_advanced.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.display_settings')
-    @patch('openhands.core.cli_commands.cli_confirm')
-    @patch('openhands.core.cli_commands.modify_llm_settings_advanced')
+    @patch('openhands.cli.commands.display_settings')
+    @patch('openhands.cli.commands.cli_confirm')
+    @patch('openhands.cli.commands.modify_llm_settings_advanced')
     async def test_settings_advanced_without_changes(
         self,
         mock_modify_advanced,
         mock_cli_confirm,
         mock_display_settings,
     ):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         settings_store = MagicMock(spec=FileSettingsStore)
 
         # Mock user selecting "Advanced" settings
@@ -446,10 +543,10 @@ class TestHandleSettingsCommand:
         mock_modify_advanced.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.core.cli_commands.display_settings')
-    @patch('openhands.core.cli_commands.cli_confirm')
+    @patch('openhands.cli.commands.display_settings')
+    @patch('openhands.cli.commands.cli_confirm')
     async def test_settings_go_back(self, mock_cli_confirm, mock_display_settings):
-        config = MagicMock(spec=AppConfig)
+        config = MagicMock(spec=OpenHandsConfig)
         settings_store = MagicMock(spec=FileSettingsStore)
 
         # Mock user selecting "Go back"
@@ -461,3 +558,40 @@ class TestHandleSettingsCommand:
         # Verify correct behavior
         mock_display_settings.assert_called_once_with(config)
         mock_cli_confirm.assert_called_once()
+
+
+class TestHandleResumeCommand:
+    @pytest.mark.asyncio
+    async def test_handle_resume_command(self):
+        """Test that handle_resume_command adds the 'continue' message to the event stream."""
+        # Create a mock event stream
+        event_stream = MagicMock(spec=EventStream)
+
+        # Call the function
+        close_repl, new_session_requested = await handle_resume_command(event_stream)
+
+        # Check that the event stream add_event was called with the correct message action
+        event_stream.add_event.assert_called_once()
+        args, kwargs = event_stream.add_event.call_args
+        message_action, source = args
+
+        assert isinstance(message_action, MessageAction)
+        assert message_action.content == 'continue'
+        assert source == EventSource.USER
+
+        # Check the return values
+        assert close_repl is True
+        assert new_session_requested is False
+
+
+class TestMCPErrorHandling:
+    """Test MCP error handling in commands."""
+
+    @patch('openhands.cli.commands.display_mcp_errors')
+    def test_handle_mcp_errors_command(self, mock_display_errors):
+        """Test handling MCP errors command."""
+        from openhands.cli.commands import handle_mcp_errors_command
+
+        handle_mcp_errors_command()
+
+        mock_display_errors.assert_called_once()

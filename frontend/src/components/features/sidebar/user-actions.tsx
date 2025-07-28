@@ -26,16 +26,15 @@ export function UserActions({ onLogout, user, isLoading }: UserActionsProps) {
   };
 
   return (
-    <div data-testid="user-actions" className="w-8 h-8 relative">
+    <div data-testid="user-actions" className="w-8 h-8 relative cursor-pointer">
       <UserAvatar
         avatarUrl={user?.avatar_url}
         onClick={toggleAccountMenu}
         isLoading={isLoading}
       />
 
-      {accountContextMenuIsVisible && (
+      {accountContextMenuIsVisible && !!user && (
         <AccountSettingsContextMenu
-          isLoggedIn={!!user}
           onLogout={handleLogout}
           onClose={closeAccountMenu}
         />
