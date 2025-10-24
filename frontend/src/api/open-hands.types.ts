@@ -26,10 +26,6 @@ export interface FeedbackResponse {
   body: FeedbackBodyResponse;
 }
 
-export interface GitHubAccessTokenResponse {
-  access_token: string;
-}
-
 export interface AuthenticationResponse {
   message: string;
   login?: string; // Only present when allow list is enabled
@@ -44,20 +40,6 @@ export interface Feedback {
   trajectory: unknown[];
 }
 
-export interface GetConfigResponse {
-  APP_MODE: "saas" | "oss";
-  APP_SLUG?: string;
-  GITHUB_CLIENT_ID: string;
-  POSTHOG_CLIENT_KEY: string;
-  STRIPE_PUBLISHABLE_KEY?: string;
-  PROVIDERS_CONFIGURED?: Provider[];
-  FEATURE_FLAGS: {
-    ENABLE_BILLING: boolean;
-    HIDE_LLM_SETTINGS: boolean;
-    HIDE_MICROAGENT_MANAGEMENT?: boolean;
-  };
-}
-
 export interface GetVSCodeUrlResponse {
   vscode_url: string | null;
   error?: string;
@@ -65,11 +47,6 @@ export interface GetVSCodeUrlResponse {
 
 export interface GetTrajectoryResponse {
   trajectory: unknown[] | null;
-  error?: string;
-}
-
-export interface AuthenticateResponse {
-  message?: string;
   error?: string;
 }
 
@@ -99,6 +76,7 @@ export interface Conversation {
   url: string | null;
   session_api_key: string | null;
   pr_number?: number[] | null;
+  conversation_version?: "V0" | "V1";
 }
 
 export interface ResultSet<T> {
@@ -139,8 +117,26 @@ export interface GetMicroagentPromptResponse {
   prompt: string;
 }
 
+export interface IOption<T> {
+  label: string;
+  value: T;
+}
+
 export interface CreateMicroagent {
   repo: string;
   git_provider?: Provider;
   title?: string;
+}
+
+export interface MicroagentContentResponse {
+  content: string;
+  path: string;
+  git_provider: Provider;
+  triggers: string[];
+}
+
+export type GetFilesResponse = string[];
+
+export interface GetFileResponse {
+  code: string;
 }

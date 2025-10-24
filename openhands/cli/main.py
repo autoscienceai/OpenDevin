@@ -1,3 +1,5 @@
+import openhands.cli.suppress_warnings  # noqa: F401  # isort: skip
+
 import asyncio
 import logging
 import os
@@ -8,11 +10,11 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.shortcuts import clear
 
 import openhands.agenthub  # noqa F401 (we import this to get the agents registered)
-import openhands.cli.suppress_warnings  # noqa: F401
 from openhands.cli.commands import (
     check_folder_security_agreement,
     handle_commands,
 )
+from openhands.cli.deprecation_warning import display_deprecation_warning
 from openhands.cli.settings import modify_llm_settings_basic
 from openhands.cli.shell_config import (
     ShellConfigManager,
@@ -45,11 +47,12 @@ from openhands.controller import AgentController
 from openhands.controller.agent import Agent
 from openhands.core.config import (
     OpenHandsConfig,
-    parse_arguments,
     setup_config_from_args,
 )
 from openhands.core.config.condenser_config import NoOpCondenserConfig
-from openhands.core.config.mcp_config import OpenHandsMCPConfigImpl
+from openhands.core.config.mcp_config import (
+    OpenHandsMCPConfigImpl,
+)
 from openhands.core.config.utils import finalize_config
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.loop import run_agent_until_done
@@ -65,6 +68,7 @@ from openhands.core.setup import (
 )
 from openhands.events import EventSource, EventStreamSubscriber
 from openhands.events.action import (
+    ActionSecurityRisk,
     ChangeAgentStateAction,
     MessageAction,
 )
@@ -82,6 +86,7 @@ from openhands.microagent.microagent import BaseMicroagent
 from openhands.runtime import get_runtime_cls
 from openhands.runtime.base import Runtime
 from openhands.storage.settings.file_settings_store import FileSettingsStore
+from openhands.utils.utils import create_registry_and_conversation_stats
 
 
 async def cleanup_session(
@@ -127,15 +132,19 @@ async def run_session(
     conversation_instructions: str | None = None,
     session_name: str | None = None,
     skip_banner: bool = False,
+    conversation_id: str | None = None,
 ) -> bool:
     reload_microagents = False
     new_session_requested = False
     exit_reason = ExitReason.INTENTIONAL
 
-    sid = generate_sid(config, session_name)
+    sid = conversation_id or generate_sid(config, session_name)
     is_loaded = asyncio.Event()
     is_paused = asyncio.Event()  # Event to track agent pause requests
     always_confirm_mode = False  # Flag to enable always confirm mode
+    auto_highrisk_confirm_mode = (
+        False  # Flag to enable auto_highrisk confirm mode (only ask for HIGH risk)
+    )
 
     # Show runtime initialization message
     display_runtime_initialization_message(config.runtime)
@@ -145,9 +154,16 @@ async def run_session(
         None, display_initialization_animation, 'Initializing...', is_loaded
     )
 
-    agent = create_agent(config)
+    llm_registry, conversation_stats, config = create_registry_and_conversation_stats(
+        config,
+        sid,
+        None,
+    )
+
+    agent = create_agent(config, llm_registry)
     runtime = create_runtime(
         config,
+        llm_registry,
         sid=sid,
         headless_mode=True,
         agent=agent,
@@ -159,7 +175,9 @@ async def run_session(
 
     runtime.subscribe_to_shell_stream(stream_to_console)
 
-    controller, initial_state = create_controller(agent, runtime, config)
+    controller, initial_state = create_controller(
+        agent, runtime, config, conversation_stats
+    )
 
     event_stream = runtime.event_stream
 
@@ -188,13 +206,18 @@ async def run_session(
                 config,
                 current_dir,
                 settings_store,
+                agent_state,
             )
 
             if close_repl:
                 return
 
     async def on_event_async(event: Event) -> None:
-        nonlocal reload_microagents, is_paused, always_confirm_mode
+        nonlocal \
+            reload_microagents, \
+            is_paused, \
+            always_confirm_mode, \
+            auto_highrisk_confirm_mode
         display_event(event, config)
         update_usage_metrics(event, usage_metrics)
 
@@ -233,8 +256,26 @@ async def run_session(
                     )
                     return
 
-                confirmation_status = await read_confirmation_input(config)
-                if confirmation_status in ('yes', 'always'):
+                # Check if auto_highrisk confirm mode is enabled and action is low/medium risk
+                pending_action = controller._pending_action
+                security_risk = ActionSecurityRisk.LOW
+                if pending_action and hasattr(pending_action, 'security_risk'):
+                    security_risk = pending_action.security_risk
+                if (
+                    auto_highrisk_confirm_mode
+                    and security_risk != ActionSecurityRisk.HIGH
+                ):
+                    event_stream.add_event(
+                        ChangeAgentStateAction(AgentState.USER_CONFIRMED),
+                        EventSource.USER,
+                    )
+                    return
+
+                # Get the pending action to show risk information
+                confirmation_status = await read_confirmation_input(
+                    config, security_risk=security_risk
+                )
+                if confirmation_status in ('yes', 'always', 'auto_highrisk'):
                     event_stream.add_event(
                         ChangeAgentStateAction(AgentState.USER_CONFIRMED),
                         EventSource.USER,
@@ -252,9 +293,11 @@ async def run_session(
                         )
                     )
 
-                # Set the always_confirm_mode flag if the user wants to always confirm
+                # Set the confirmation mode flags based on user choice
                 if confirmation_status == 'always':
                     always_confirm_mode = True
+                elif confirmation_status == 'auto_highrisk':
+                    auto_highrisk_confirm_mode = True
 
             if event.agent_state == AgentState.PAUSED:
                 is_paused.clear()  # Revert the event state before prompting for user input
@@ -352,10 +395,23 @@ async def run_session(
 
         if initial_state.last_error:
             # If the last session ended in an error, provide a message.
-            initial_message = (
-                'NOTE: the last session ended with an error.'
-                "Let's get back on track. Do NOT resume your task. Ask me about it."
-            )
+            error_message = initial_state.last_error
+
+            # Check if it's an authentication error
+            if 'ERROR_LLM_AUTHENTICATION' in error_message:
+                # Start with base authentication error message
+                welcome_message = 'Authentication error with the LLM provider. Please check your API key.'
+
+                # Add OpenHands-specific guidance if using an OpenHands model
+                llm_config = config.get_llm_config()
+                if llm_config.model.startswith('openhands/'):
+                    welcome_message += "\nIf you're using OpenHands models, get a new API key from https://app.all-hands.dev/settings/api-keys"
+            else:
+                # For other errors, use the standard message
+                initial_message = (
+                    'NOTE: the last session ended with an error.'
+                    "Let's get back on track. Do NOT resume your task. Ask me about it."
+                )
         else:
             # If we are resuming, we already have a task
             initial_message = ''
@@ -374,9 +430,25 @@ async def run_session(
         # No session restored, no initial action: prompt for the user's first message
         asyncio.create_task(prompt_for_next_task(''))
 
-    await run_agent_until_done(
-        controller, runtime, memory, [AgentState.STOPPED, AgentState.ERROR]
-    )
+    skip_set_callback = False
+    while True:
+        await run_agent_until_done(
+            controller,
+            runtime,
+            memory,
+            [AgentState.STOPPED, AgentState.ERROR],
+            skip_set_callback,
+        )
+        # Try loop recovery in CLI app
+        if (
+            controller.state.agent_state == AgentState.ERROR
+            and controller.state.last_error.startswith('AgentStuckInLoopError')
+        ):
+            controller.attempt_loop_recovery()
+            skip_set_callback = True
+            continue
+        else:
+            break
 
     await cleanup_session(loop, agent, runtime, controller)
 
@@ -403,6 +475,19 @@ async def run_setup_flow(config: OpenHandsConfig, settings_store: FileSettingsSt
 
     # Use the existing settings modification function for basic setup
     await modify_llm_settings_basic(config, settings_store)
+
+    # Ask if user wants to configure search API settings
+    print_formatted_text('')
+    setup_search = cli_confirm(
+        config,
+        'Would you like to configure Search API settings (optional)?',
+        ['Yes', 'No'],
+    )
+
+    if setup_search == 0:  # Yes
+        from openhands.cli.settings import modify_search_api_settings
+
+        await modify_search_api_settings(config, settings_store)
 
 
 def run_alias_setup_flow(config: OpenHandsConfig) -> None:
@@ -494,10 +579,8 @@ def run_alias_setup_flow(config: OpenHandsConfig) -> None:
     print_formatted_text('')
 
 
-async def main_with_loop(loop: asyncio.AbstractEventLoop) -> None:
+async def main_with_loop(loop: asyncio.AbstractEventLoop, args) -> None:
     """Runs the agent in CLI mode."""
-    args = parse_arguments()
-
     # Set log level from command line argument if provided
     if args.log_level and isinstance(args.log_level, str):
         log_level = getattr(logging, str(args.log_level).upper())
@@ -545,13 +628,9 @@ async def main_with_loop(loop: asyncio.AbstractEventLoop) -> None:
 
     # Use settings from settings store if available and override with command line arguments
     if settings:
-        # Handle agent configuration
-        if args.agent_cls:
-            config.default_agent = str(args.agent_cls)
-        else:
-            # settings.agent is not None because we check for it in setup_config_from_args
-            assert settings.agent is not None
-            config.default_agent = settings.agent
+        # settings.agent is not None because we check for it in setup_config_from_args
+        assert settings.agent is not None
+        config.default_agent = settings.agent
 
         # Handle LLM configuration with proper precedence:
         # 1. CLI parameters (-l) have highest precedence (already handled in setup_config_from_args)
@@ -576,6 +655,11 @@ async def main_with_loop(loop: asyncio.AbstractEventLoop) -> None:
         config.security.confirmation_mode = (
             settings.confirmation_mode if settings.confirmation_mode else False
         )
+
+        # Load search API key from settings if available and not already set from config.toml
+        if settings.search_api_key and not config.search_api_key:
+            config.search_api_key = settings.search_api_key
+            logger.debug('Using search API key from settings.json')
 
         if settings.enable_default_condenser:
             # TODO: Make this generic?
@@ -606,6 +690,10 @@ async def main_with_loop(loop: asyncio.AbstractEventLoop) -> None:
         if not config.workspace_base:
             config.workspace_base = os.getcwd()
         config.security.confirmation_mode = True
+        config.security.security_analyzer = 'llm'
+        agent_config = config.get_agent_config(config.default_agent)
+        agent_config.cli_mode = True
+        config.set_agent_config(agent_config)
 
         # Need to finalize config again after setting runtime to 'cli'
         # This ensures Jupyter plugin is disabled for CLI runtime
@@ -671,6 +759,7 @@ After reviewing the file, please ask the user what they would like to do with it
         task_str,
         session_name=args.name,
         skip_banner=banner_shown,
+        conversation_id=args.conversation,
     )
 
     # If a new session was requested, run it
@@ -683,18 +772,16 @@ After reviewing the file, please ask the user what they would like to do with it
     get_runtime_cls(config.runtime).teardown(config)
 
 
-def main():
+def run_cli_command(args):
+    """Run the CLI command with proper error handling and cleanup."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(main_with_loop(loop))
+        loop.run_until_complete(main_with_loop(loop, args))
     except KeyboardInterrupt:
         print_formatted_text('⚠️ Session was interrupted: interrupted\n')
     except ConnectionRefusedError as e:
-        print(f'Connection refused: {e}')
-        sys.exit(1)
-    except Exception as e:
-        print(f'An error occurred: {e}')
+        print_formatted_text(f'Connection refused: {e}')
         sys.exit(1)
     finally:
         try:
@@ -707,9 +794,8 @@ def main():
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             loop.close()
         except Exception as e:
-            print(f'Error during cleanup: {e}')
+            print_formatted_text(f'Error during cleanup: {e}')
             sys.exit(1)
-
-
-if __name__ == '__main__':
-    main()
+        finally:
+            # Display deprecation warning on exit
+            display_deprecation_warning()
